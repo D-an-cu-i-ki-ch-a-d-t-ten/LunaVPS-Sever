@@ -1,167 +1,116 @@
-CREATE TYPE user_role AS ENUM ('USER', 'ADMIN');
+CREATE DATABASE vps_auth
+  CHARACTER SET utf8mb4
+  COLLATE utf8mb4_unicode_ci;
 
-CREATE TYPE transaction_type AS ENUM ('DEPOSIT', 'WITHDRAW', 'PAYMENT');
+USE vps_auth;
+CREATE TABLE users (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
 
-CREATE TYPE transaction_status AS ENUM ('PENDING', 'SUCCESS', 'FAILED');
+    email VARCHAR(255) NOT NULL,
+    password_hash VARCHAR(255) NULL,
+    full_name VARCHAR(255),
+    avatar_url VARCHAR(512),
 
-CREATE TYPE order_status AS ENUM ('PENDING', 'COMPLETED', 'CANCELLED');
+    status ENUM(
+        'UNVERIFIED',
+        'ACTIVE',
+        'SUSPENDED',
+        'BANNED'
+    ) NOT NULL DEFAULT 'UNVERIFIED',
 
-CREATE TYPE vps_status AS ENUM ('RUNNING', 'STOPPED', 'EXPIRED', 'PENDING');
+    is_suspicious BOOLEAN DEFAULT FALSE,
 
-CREATE TABLE USERS (
+    provider ENUM('LOCAL', 'GOOGLE') DEFAULT 'LOCAL',
+    provider_id VARCHAR(255) NULL,
 
-    id SERIAL PRIMARY KEY,
+    email_verified_at TIMESTAMP NULL,
 
-    avatar TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 
-    first_name VARCHAR(50),
+    UNIQUE KEY uk_users_email (email),
+    UNIQUE KEY uk_provider (provider, provider_id)
+) ENGINE=InnoDB;
+CREATE TABLE email_verification_tokens (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    user_id BIGINT NOT NULL,
 
-    last_name VARCHAR(50),
+    token_hash VARCHAR(255) NOT NULL,
+    expired_at TIMESTAMP NOT NULL,
+    used_at TIMESTAMP NULL,
 
-    full_name VARCHAR(100),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
-    email VARCHAR(255) UNIQUE NOT NULL,
+    CONSTRAINT fk_evt_user
+        FOREIGN KEY (user_id)
+        REFERENCES users(id)
+        ON DELETE CASCADE,
 
-    password TEXT NOT NULL,
+    INDEX idx_evt_user (user_id),
+    INDEX idx_evt_token (token_hash)
+) ENGINE=InnoDB;
+CREATE TABLE sessions (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    user_id BIGINT NOT NULL,
 
-    role user_role DEFAULT 'USER',
+    token_id VARCHAR(255) NOT NULL, -- jti trong JWT
+    expired_at TIMESTAMP NOT NULL,
+    revoked_at TIMESTAMP NULL,
 
-    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    CONSTRAINT fk_sessions_user
+        FOREIGN KEY (user_id)
+        REFERENCES users(id)
+        ON DELETE CASCADE,
 
-);
+    UNIQUE KEY uk_token_id (token_id),
+    INDEX idx_sessions_user (user_id),
+    INDEX idx_sessions_expired (expired_at)
+) ENGINE=InnoDB;
+CREATE TABLE password_reset_otps (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    user_id BIGINT NOT NULL,
 
+    otp_hash VARCHAR(255) NOT NULL,
+    expired_at TIMESTAMP NOT NULL,
+    used_at TIMESTAMP NULL,
 
+    attempt_count INT DEFAULT 0,
+    max_attempt INT DEFAULT 5,
 
-CREATE TABLE USER_SESSIONS (
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
-    id SERIAL PRIMARY KEY,
+    CONSTRAINT fk_reset_user
+        FOREIGN KEY (user_id)
+        REFERENCES users(id)
+        ON DELETE CASCADE,
 
-    user_id INTEGER REFERENCES USERS(id) ON DELETE CASCADE,
+    INDEX idx_reset_user (user_id),
+    INDEX idx_reset_expired (expired_at)
+) ENGINE=InnoDB;
+CREATE TABLE oauth_states (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
 
-    refresh_token TEXT NOT NULL,
-
+    state VARCHAR(255) NOT NULL,
+    provider ENUM('GOOGLE') NOT NULL,
     expired_at TIMESTAMP NOT NULL,
 
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
-);
-
-CREATE TABLE WALLETS (
-
-    id SERIAL PRIMARY KEY,
-
-    user_id INTEGER UNIQUE REFERENCES USERS(id) ON DELETE CASCADE,
-
-    balance DECIMAL(15, 2) DEFAULT 0.00,
-
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-
-);
-
-
-
-CREATE TABLE TRANSACTIONS (
-
-    id SERIAL PRIMARY KEY,
-
-    wallet_id INTEGER REFERENCES WALLETS(id) ON DELETE CASCADE,
-
-    type transaction_type NOT NULL,
-
-    amount DECIMAL(15, 2) NOT NULL,
-
-    status transaction_status DEFAULT 'PENDING',
-
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-
-);
-
-CREATE TABLE ORDERS (
-
-    id SERIAL PRIMARY KEY,
-
-    user_id INTEGER REFERENCES USERS(id),
-
-    total_price DECIMAL(15, 2) NOT NULL,
-
-    status order_status DEFAULT 'PENDING',
-
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-
-);
-
-
-
-CREATE TABLE VPS (
-
-    id SERIAL PRIMARY KEY,
-
-    order_id INTEGER REFERENCES ORDERS(id),
-
-    user_id INTEGER REFERENCES USERS(id),
-
-    cpu INTEGER NOT NULL,
-
-    ram INTEGER NOT NULL, -- Đơn vị MB hoặc GB
-
-    storage INTEGER NOT NULL, -- Đơn vị GB
-
-    os VARCHAR(50),
-
-    ip_address VARCHAR(45),
-
-    status vps_status DEFAULT 'PENDING',
-
-    expired_at TIMESTAMP,
-
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-
-);
-
-
-
-CREATE TABLE VPS_CREDENTIALS (
-
-    id SERIAL PRIMARY KEY,
-
-    vps_id INTEGER UNIQUE REFERENCES VPS(id) ON DELETE CASCADE,
-
-    username VARCHAR(50) NOT NULL,
-
-    password TEXT NOT NULL,
-
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-
-);
-
-CREATE TABLE VPS_ACTION_LOGS (
-
-    id SERIAL PRIMARY KEY,
-
-    vps_id INTEGER REFERENCES VPS(id) ON DELETE CASCADE,
+    UNIQUE KEY uk_oauth_state (state)
+) ENGINE=InnoDB;
+CREATE TABLE audit_logs (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    user_id BIGINT NULL,
 
     action VARCHAR(100) NOT NULL,
+    ip_address VARCHAR(45),
+    user_agent VARCHAR(255),
 
-    performed_by INTEGER REFERENCES USERS(id),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-
-);
-
-
-
-CREATE TABLE AUDIT_LOGS (
-
-    id SERIAL PRIMARY KEY,
-
-    user_id INTEGER REFERENCES USERS(id),
-
-    action VARCHAR(255) NOT NULL,
-
-    detail TEXT,
-
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-
-);
+    INDEX idx_audit_user (user_id),
+    INDEX idx_audit_action (action),
+    INDEX idx_audit_created (created_at)
+) ENGINE=InnoDB;
